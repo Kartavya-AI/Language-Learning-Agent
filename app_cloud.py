@@ -290,26 +290,31 @@
 
 # st.markdown("---")
 # st.markdown("🎵 Built with Streamlit - Cloud Compatible")
-
-from google import genai
 import streamlit as st
 from streamlit_mic_recorder import mic_recorder
+import io
+import asyncio
+import wave
+import numpy as np
+from google import genai
+from google.genai import types
 import os
 import tempfile
-import wave
+import traceback
 from dotenv import load_dotenv
-from google.generativeai.types import content_types  # ✅ FIXED IMPORT
-import asyncio
 
-# Load .env if available
+# Load environment variables first
 load_dotenv()
 
-# Streamlit page setup
-st.set_page_config(page_title="🎤 Voice Feedback with Gemini", layout="centered")
-st.title("🎤 Voice Recorder + Gemini Feedback")
-st.markdown("Record your voice or upload an audio file, and get spoken feedback from Google Gemini!")
-
-# Sidebar for Gemini API key
+# Set page config
+st.set_page_config(
+    page_title="Voice Recorder with Gemini AI",
+    page_icon="🎤",
+    layout="centered"
+)
+# ------------------------ #
+# Sidebar: API Key Settings
+# ------------------------ #
 with st.sidebar:
     st.header("⚙️ AI & API Settings")
 
@@ -324,119 +329,394 @@ with st.sidebar:
         if gemini_api_key:
             st.session_state["GEMINI_API_KEY"] = gemini_api_key
             os.environ["GEMINI_API_KEY"] = gemini_api_key
-            st.success("✅ Settings saved!")
+            st.success("✅ Settings saved successfully!")
         else:
             st.error("❌ Please enter a valid Gemini API key.")
 
-# Configure Gemini if key is provided
-if os.getenv("GEMINI_API_KEY"):
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-else:
-    st.warning("⚠️ Please enter your Gemini API key in the sidebar to enable AI feedback.")
+# Load .env variables
+load_dotenv()
+# Get API key from environment
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Gemini config
-MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
-SAMPLE_RATE = 16000  # Must be PCM 16KHz
+# Initialize session state
+if 'audio_data' not in st.session_state:
+    st.session_state.audio_data = None
+if 'gemini_response' not in st.session_state:
+    st.session_state.gemini_response = None
+if 'processing' not in st.session_state:
+    st.session_state.processing = False
 
+st.title("🎤 Voice Recorder with Gemini AI")
+st.markdown("Record your voice, get AI feedback, and play back responses!")
+
+# ------------------------ #
+# Sidebar: API Key Settings
+# ------------------------ #
+with st.sidebar:
+    st.header("⚙️ AI & API Settings")
+    st.info(f"🔑 Current API Key: {GEMINI_API_KEY[:10]}...{GEMINI_API_KEY[-4:] if GEMINI_API_KEY else 'Not Set'}")
+    
+    # Test API key
+    if st.button("🧪 Test API Key"):
+        if GEMINI_API_KEY:
+            try:
+                client = genai.Client(api_key=GEMINI_API_KEY)
+                st.success("✅ API Key is valid!")
+            except Exception as e:
+                st.error(f"❌ API Key test failed: {str(e)}")
+        else:
+            st.error("❌ No API key found")
+
+# Gemini configuration
+MODEL = "gemini-2.0-flash-exp"  # Using a more stable model
 config = {
     "response_modalities": ["AUDIO"],
     "system_instruction": (
         "You are a friendly and patient language learning assistant. "
-        "Listen to the user's voice input and provide helpful feedback on pronunciation, fluency, and grammar. "
-        "Respond with encouragement and corrections as needed, using a warm, supportive tone."
-    )
+        "Your job is to help the user improve their language skills by listening carefully to their speech, "
+        "providing gentle corrections for pronunciation, grammar, vocabulary, and sentence structure. "
+        "When the user speaks, respond with clear explanations and examples, "
+        "correct mistakes thoughtfully, and encourage them to practice more. "
+        "Be supportive, educational, and conversational. Keep your responses concise but helpful."
+    ),
 }
 
-# Recorder section
-st.markdown("### 🎙️ Record your voice")
+def convert_audio_to_pcm16(audio_bytes, sample_rate=16000):
+    """Convert audio bytes to PCM16 format for Gemini"""
+    try:
+        # Create a temporary file to work with
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_file:
+            temp_file.write(audio_bytes)
+            temp_file_path = temp_file.name
+        
+        # Try to load the audio using librosa (most robust)
+        try:
+            import librosa
+            # Load audio with librosa (handles most formats including webm)
+            data, original_sr = librosa.load(temp_file_path, sr=None, mono=True)
+            
+            # Resample to 16kHz if needed
+            if original_sr != sample_rate:
+                data = librosa.resample(data, orig_sr=original_sr, target_sr=sample_rate)
+            
+            # Convert to int16 (PCM16)
+            # librosa loads as float32 in range [-1, 1]
+            data = np.clip(data, -1.0, 1.0)  # Ensure values are in valid range
+            data = (data * 32767).astype(np.int16)
+            
+        except Exception as librosa_error:
+            st.warning(f"Librosa failed: {librosa_error}, trying alternative method...")
+            
+            # Fallback: try with soundfile
+            try:
+                import soundfile as sf
+                data, original_sr = sf.read(temp_file_path)
+                
+                # Resample if needed
+                if original_sr != sample_rate:
+                    from scipy import signal
+                    num_samples = int(len(data) * sample_rate / original_sr)
+                    data = signal.resample(data, num_samples)
+                
+                # Convert to mono if stereo
+                if len(data.shape) > 1:
+                    data = np.mean(data, axis=1)
+                
+                # Convert to int16
+                if data.dtype != np.int16:
+                    if data.dtype == np.float32 or data.dtype == np.float64:
+                        data = np.clip(data, -1.0, 1.0)
+                        data = (data * 32767).astype(np.int16)
+                    else:
+                        data = data.astype(np.int16)
+                        
+            except Exception as sf_error:
+                st.error(f"All audio loading methods failed. Librosa: {librosa_error}, Soundfile: {sf_error}")
+                # Clean up temp file
+                try:
+                    os.unlink(temp_file_path)
+                except:
+                    pass
+                return None
+        
+        # Clean up temp file
+        try:
+            os.unlink(temp_file_path)
+        except:
+            pass
+        
+        st.success(f"✅ Audio converted successfully: {len(data)} samples at {sample_rate}Hz")
+        return data.tobytes()
+    
+    except Exception as e:
+        st.error(f"❌ Error converting audio: {str(e)}")
+        st.error(f"Traceback: {traceback.format_exc()}")
+        return None
+
+async def process_audio_with_gemini(client, audio_bytes):
+    """Process audio with Gemini and return response audio"""
+    try:
+        st.info("🔄 Converting audio format...")
+        
+        # Convert audio to PCM16 format
+        pcm_audio = convert_audio_to_pcm16(audio_bytes)
+        if pcm_audio is None:
+            return None
+        
+        st.info("🔄 Connecting to Gemini...")
+        
+        async with client.aio.live.connect(model=MODEL, config=config) as session:
+            st.info("🔄 Sending audio to Gemini...")
+            
+            # Send audio to Gemini
+            await session.send_realtime_input(
+                audio=types.Blob(data=pcm_audio, mime_type="audio/pcm;rate=16000")
+            )
+            
+            st.info("🔄 Waiting for Gemini response...")
+            
+            # Collect response audio
+            response_audio = io.BytesIO()
+            
+            # Create WAV file structure
+            wf = wave.open(response_audio, "wb")
+            wf.setnchannels(1)  # mono output
+            wf.setsampwidth(2)  # 16-bit audio
+            wf.setframerate(24000)  # 24kHz output per model docs
+            
+            response_count = 0
+            async for response in session.receive():
+                if response.data is not None:
+                    wf.writeframes(response.data)
+                    response_count += 1
+            
+            wf.close()
+            response_audio.seek(0)
+            
+            if response_count == 0:
+                st.warning("⚠️ No audio response received from Gemini")
+                return None
+            
+            st.info(f"✅ Received {response_count} audio chunks from Gemini")
+            return response_audio.getvalue()
+            
+    except Exception as e:
+        st.error(f"❌ Error processing with Gemini: {str(e)}")
+        st.error(f"Traceback: {traceback.format_exc()}")
+        return None
+
+def run_gemini_processing_sync(audio_bytes):
+    """Synchronous wrapper for Gemini processing"""
+    try:
+        if not GEMINI_API_KEY:
+            st.error("❌ No Gemini API key found in environment")
+            return None
+        
+        # Create client
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        
+        # Run async processing
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(process_audio_with_gemini(client, audio_bytes))
+        finally:
+            loop.close()
+        
+        return result
+        
+    except Exception as e:
+        st.error(f"❌ Error in processing: {str(e)}")
+        st.error(f"Traceback: {traceback.format_exc()}")
+        return None
+
+# Main recording interface
+st.markdown("### 🎙️ Click the microphone to record")
+
+# Record audio
 audio = mic_recorder(
     start_prompt="🎤 Start Recording",
-    stop_prompt="⏹️ Stop Recording",
+    stop_prompt="⏹️ Stop Recording", 
     just_once=False,
     use_container_width=True,
+    callback=None,
+    args=(),
+    kwargs={},
     key='recorder'
 )
 
-# Upload section
-st.markdown("### 📁 Or upload an audio file")
-uploaded_file = st.file_uploader("Upload audio", type=["wav", "mp3", "ogg", "m4a"])
+# Process recorded audio
+if audio and not st.session_state.processing:
+    st.session_state.audio_data = audio
+    
+    st.markdown("### 🔊 Your Recording")
+    st.success("✅ Recording completed!")
+    
+    # Display audio info
+    col1, col2 = st.columns(2)
+    with col1:
+        st.info(f"🎵 Format: {audio['format']}")
+    with col2:
+        st.info(f"📊 Sample rate: {audio['sample_rate']} Hz")
+    
+    # Play original audio
+    st.audio(audio['bytes'], format=audio['format'])
+    
+    # Download button for original
+    st.download_button(
+        label="💾 Download Original Recording",
+        data=audio['bytes'],
+        file_name=f"recording.{audio['format']}",
+        mime=f"audio/{audio['format']}",
+        use_container_width=True
+    )
 
-# Determine audio input source
-audio_bytes = None
-audio_format = "wav"
+# Gemini AI Processing Section
+if st.session_state.audio_data and not st.session_state.processing:
+    st.markdown("### 🤖 AI Analysis with Gemini")
+    
+    if st.button("🧠 Analyze with Gemini AI", use_container_width=True, type="primary"):
+        if not GEMINI_API_KEY:
+            st.error("❌ No Gemini API key found. Please set GEMINI_API_KEY in your .env file")
+        else:
+            st.session_state.processing = True
+            
+            # Create a placeholder for status updates
+            status_placeholder = st.empty()
+            
+            with status_placeholder.container():
+                st.info("🚀 Starting Gemini processing...")
+                
+                # Process the audio
+                result = run_gemini_processing_sync(st.session_state.audio_data['bytes'])
+                
+                if result and len(result) > 0:
+                    st.session_state.gemini_response = result
+                    st.session_state.processing = False
+                    status_placeholder.success("✅ AI analysis complete!")
+                    st.rerun()
+                else:
+                    st.session_state.processing = False
+                    status_placeholder.error("❌ Failed to get response from Gemini AI")
 
-if audio:
-    audio_bytes = audio["bytes"]
-    audio_format = audio["format"]
-    st.audio(audio_bytes, format=f"audio/{audio_format}")
-elif uploaded_file:
-    audio_bytes = uploaded_file.read()
-    audio_format = uploaded_file.name.split(".")[-1]
-    st.audio(audio_bytes, format=f"audio/{audio_format}")
+# Display Gemini response
+if st.session_state.gemini_response:
+    st.markdown("### 🎯 AI Feedback & Response")
+    st.success("🤖 Gemini has analyzed your speech!")
+    
+    # Play Gemini's audio response
+    st.audio(st.session_state.gemini_response, format="audio/wav")
+    
+    # Download Gemini response
+    st.download_button(
+        label="💾 Download AI Response",
+        data=st.session_state.gemini_response,
+        file_name="gemini_response.wav",
+        mime="audio/wav",
+        use_container_width=True
+    )
 
-# Send to Gemini for feedback
-if audio_bytes and os.getenv("GEMINI_API_KEY"):
-    st.markdown("### 🧠 Get Voice Feedback from Gemini")
+# Control buttons
+if st.session_state.audio_data or st.session_state.gemini_response:
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🗑️ Clear Recording", use_container_width=True):
+            st.session_state.audio_data = None
+            st.session_state.gemini_response = None
+            st.session_state.processing = False
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 Reset All", use_container_width=True):
+            st.session_state.audio_data = None
+            st.session_state.gemini_response = None
+            st.session_state.processing = False
+            st.rerun()
 
-    if st.button("🤖 Analyze with Gemini"):
-        with st.spinner("🔎 Gemini is listening and responding..."):
+# Alternative file upload
+st.markdown("---")
+st.markdown("### 🎵 Alternative: File Upload")
+st.markdown("If the microphone doesn't work, you can upload an audio file:")
 
-            # Save the input audio as PCM 16-bit WAV file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                with wave.open(tmp.name, "wb") as wf:
-                    wf.setnchannels(1)        # Mono
-                    wf.setsampwidth(2)        # 16-bit
-                    wf.setframerate(SAMPLE_RATE)
-                    wf.writeframes(audio_bytes)
-                tmp_path = tmp.name
+uploaded_file = st.file_uploader(
+    "Choose an audio file", 
+    type=['wav', 'mp3', 'ogg', 'm4a'],
+    key='audio_upload'
+)
 
-            # Read the raw PCM bytes
-            with open(tmp_path, "rb") as f:
-                raw_audio = f.read()
-
-            # Send to Gemini and get voice response
-            async def get_gemini_response():
-                client = genai.AsyncClient()
-                async with client.aio.live.connect(model=MODEL, config=config) as session:
-                    await session.send_realtime_input(
-                        audio=content_types.Blob(data=raw_audio, mime_type="audio/pcm;rate=16000")
-                    )
-
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as resp_wav:
-                        wf = wave.open(resp_wav.name, 'wb')
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(24000)  # Gemini responds at 24kHz
-
-                        async for response in session.receive():
-                            if response.data:
-                                wf.writeframes(response.data)
-
-                        wf.close()
-                        return resp_wav.name
-
-            try:
-                response_audio_path = asyncio.run(get_gemini_response())
-
-                st.success("✅ Gemini feedback received!")
-                with open(response_audio_path, "rb") as f:
-                    st.audio(f.read(), format="audio/wav")
-
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+if uploaded_file is not None:
+    st.audio(uploaded_file, format='audio/wav')
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            label="💾 Download Uploaded File",
+            data=uploaded_file.getvalue(),
+            file_name=uploaded_file.name,
+            mime="audio/wav"
+        )
+    
+    with col2:
+        if st.button("🧠 Analyze Uploaded File", use_container_width=True):
+            if not GEMINI_API_KEY:
+                st.error("❌ No Gemini API key found")
+            else:
+                with st.spinner("Processing uploaded file..."):
+                    result = run_gemini_processing_sync(uploaded_file.getvalue())
+                    if result:
+                        st.session_state.gemini_response = result
+                        st.success("✅ Uploaded file analyzed!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to process uploaded file")
 
 # Instructions
 with st.expander("📝 How to use"):
     st.markdown("""
-    1. 🎤 Record your voice using the mic or upload an audio file.
-    2. 🤖 Click **Analyze with Gemini** to send it to Google Gemini.
-    3. 🔊 Listen to the AI's feedback, spoken back to you in audio form!
+    ## Setup
+    1. Create a `.env` file in your project directory
+    2. Add your API key: `GEMINI_API_KEY=your_api_key_here`
+    3. Install dependencies: `pip install streamlit-mic-recorder google-genai soundfile librosa numpy python-dotenv`
     
-    **Note**:
-    - Only works with Gemini API keys (2.5 models with audio support).
-    - Audio must be PCM 16kHz mono (Streamlit handles it automatically).
-    - AI responses use 24kHz WAV audio format.
+    ## Recording & AI Analysis
+    1. **Click the microphone button** to start recording
+    2. **Speak clearly** into your microphone
+    3. **Click stop** when finished
+    4. **Click "Analyze with Gemini AI"** to get AI feedback
+    5. **Listen to both** your original recording and AI response
+    
+    ## Troubleshooting
+    - Check the sidebar for API key status
+    - Use "Test API Key" button to verify connection
+    - Make sure you have a stable internet connection
+    - Try uploading a file if microphone doesn't work
     """)
 
+# Debug information
+with st.expander("🔧 Debug Information"):
+    st.write("**Environment:**")
+    st.write(f"- API Key Set: {'✅ Yes' if GEMINI_API_KEY else '❌ No'}")
+    st.write(f"- API Key Preview: {GEMINI_API_KEY[:10]}...{GEMINI_API_KEY[-4:] if GEMINI_API_KEY else 'None'}")
+    
+    st.write("**Session State:**")
+    st.write(f"- Has Audio Data: {'✅ Yes' if st.session_state.audio_data else '❌ No'}")
+    st.write(f"- Has Gemini Response: {'✅ Yes' if st.session_state.gemini_response else '❌ No'}")
+    st.write(f"- Processing: {'🔄 Yes' if st.session_state.processing else '✅ No'}")
+    
+    if st.session_state.audio_data:
+        st.write(f"- Audio Format: {st.session_state.audio_data.get('format', 'Unknown')}")
+        st.write(f"- Audio Size: {len(st.session_state.audio_data.get('bytes', []))} bytes")
+
+# Footer
 st.markdown("---")
-st.caption("🧠 Built with Streamlit + Google Gemini · 2025")
+st.markdown("🎵 Enhanced Voice Recorder with Gemini AI - Built with Streamlit")
+
+# Display current status
+if st.session_state.processing:
+    st.info("🔄 Processing with AI...")
+elif st.session_state.gemini_response:
+    st.success("✅ AI analysis ready!")
+elif st.session_state.audio_data:
+    st.info("🎤 Recording ready for analysis")
+else:
+    st.info("🎙️ Ready to record")

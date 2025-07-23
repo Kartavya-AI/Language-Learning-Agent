@@ -1,11 +1,20 @@
-streamlit>=1.28.0
-sounddevice>=0.4.6
-numpy>=1.24.0
-soundfile>=0.12.1
-google-genai>=0.7.0
-python-dotenv>=1.0.0
-pathlib2>=2.3.7
-asyncio-throttle>=1.0.2
-streamlit-webrtc
-requests
-streamlit-mic-recorder>=0.0.2
+# streamlit>=1.28.0
+# sounddevice>=0.4.6
+# numpy>=1.24.0
+# soundfile>=0.12.1
+# google-genai>=0.7.0
+# python-dotenv>=1.0.0
+# pathlib2>=2.3.7
+# asyncio-throttle>=1.0.2
+# streamlit-webrtc
+# requests
+# streamlit-mic-recorder>=0.0.2
+
+streamlit
+streamlit-mic-recorder
+google-genai
+soundfile
+librosa
+numpy
+python-dotenv
+scipy
