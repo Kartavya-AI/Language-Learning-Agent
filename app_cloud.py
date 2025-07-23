@@ -11,8 +11,32 @@ from google import genai
 from google.genai import types
 
 # Load environment variables
-load_dotenv()
+with st.sidebar:
+    st.header("⚙️ AI & API Settings")
 
+    # Gemini API Key
+    gemini_api_key = st.text_input(
+        "Gemini API Key",
+        type="password",
+        value=st.session_state.get("GEMINI_API_KEY", ""),
+        help="Enter your Gemini (Google AI) API key"
+    )
+
+    # Save Button
+    if st.button("💾 Save Settings"):
+        updated = False
+
+        if gemini_api_key:
+            st.session_state["GEMINI_API_KEY"] = gemini_api_key
+            os.environ["GEMINI_API_KEY"] = gemini_api_key
+            updated = True
+
+        if updated:
+            st.success("✅ Settings saved successfully!")
+        else:
+            st.error("❌ Please enter at least one API key or model selection.")
+
+load_dotenv()
 # Configuration
 SAMPLE_RATE = 16000
 CHANNELS = 1
