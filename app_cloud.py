@@ -338,8 +338,8 @@ load_dotenv()
 # ------------------------ #
 # Setup Gemini
 # ------------------------ #
-API_KEY = st.session_state.get("GEMINI_API_KEY") 
-if not API_KEY:
+GEMINI_API_KEY = st.session_state.get("GEMINI_API_KEY") 
+if not GEMINI_API_KEY:
     st.error("❌ Gemini API key missing! Please set it in the sidebar.")
     st.stop()
 
