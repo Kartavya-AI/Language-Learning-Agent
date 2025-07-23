@@ -77,15 +77,7 @@ class AudioProcessor:
         self.frames.append(audio)
         return frame
 
-# Define class before it's used
-class AudioProcessor:
-    def __init__(self) -> None:
-        self.frames = []
 
-    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
-        audio = frame.to_ndarray().flatten()
-        self.frames.append(audio)
-        return frame
 
 # Ensure recorder is initialized before WebRTC uses it
 if "recorder" not in st.session_state:
@@ -107,11 +99,15 @@ ctx = webrtc_streamer(
 # ------------------------ #
 if ctx.audio_receiver and st.button("✅ Process Recording"):
     if not st.session_state.recorder.frames:
-        st.warning("⚠️ No audio frames recorded yet.")
+        st.warning("⚠️ No audio recorded. Click START on the microphone component above, speak, then click STOP.")
         st.stop()
 
+    # Get the recorded frames and immediately clear the buffer to avoid accumulation
+    recorded_frames = st.session_state.recorder.frames
+    st.session_state.recorder.frames = []
+
     # Combine audio
-    audio_np = np.concatenate(st.session_state.recorder.frames).astype(np.int16)
+    audio_np = np.concatenate(recorded_frames).astype(np.int16)
     audio_bytes = audio_np.tobytes()
 
     # Save to WAV
