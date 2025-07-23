@@ -290,20 +290,30 @@
 
 # st.markdown("---")
 # st.markdown("🎵 Built with Streamlit - Cloud Compatible")
+
 import streamlit as st
 from streamlit_mic_recorder import mic_recorder
-from dotenv import load_dotenv
 import os
+import tempfile
+import wave
+from dotenv import load_dotenv
 import google.generativeai as genai
 from google.generativeai.types import Blob
-import soundfile as sf
-import tempfile
-import io
-import platform
-import subprocess
-# ------------------------ #
-# Sidebar: API Key Settings
-# ------------------------ #
+import asyncio
+
+# Load .env if available
+load_dotenv()
+
+# Constants
+MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
+SAMPLE_RATE = 16000
+
+# --- Page Config ---
+st.set_page_config(page_title="🎤 Voice Feedback with Gemini", layout="centered")
+st.title("🎤 Voice Recorder + Gemini Feedback")
+st.markdown("Record your voice, and get feedback from Google Gemini!")
+
+# --- Sidebar for API key ---
 with st.sidebar:
     st.header("⚙️ AI & API Settings")
 
@@ -318,102 +328,107 @@ with st.sidebar:
         if gemini_api_key:
             st.session_state["GEMINI_API_KEY"] = gemini_api_key
             os.environ["GEMINI_API_KEY"] = gemini_api_key
-            st.success("✅ Settings saved successfully!")
+            st.success("✅ Settings saved!")
         else:
             st.error("❌ Please enter a valid Gemini API key.")
 
-# Load environment variables
-load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
-if not API_KEY:
-    st.error("❌ GEMINI_API_KEY not found in .env file")
-    st.stop()
+# --- Initialize Gemini client ---
+if os.getenv("GEMINI_API_KEY"):
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+else:
+    st.warning("⚠️ Please enter your Gemini API key in the sidebar to enable AI feedback.")
 
-# Configure Gemini
-MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
-config = {
-    "response_modalities": ["AUDIO"],
-    "system_instruction": (
-        "You are a friendly and patient language learning assistant. "
-        "Your job is to help the user improve their language skills by listening carefully to their speech, "
-        "providing gentle corrections for pronunciation, grammar, vocabulary, and sentence structure. "
-        "When the user speaks, respond with clear explanations and examples, "
-        "correct mistakes thoughtfully, and encourage them to practice more. "
-        "Be supportive, educational, and conversational."
-    ),
-}
-client = genai.Client(api_key=API_KEY)
-
-st.set_page_config(page_title="Language Learning Assistant 🎧", layout="centered")
-st.title("🗣️ Language Learning Assistant with Gemini AI")
-st.markdown("Record your voice and get spoken feedback from an AI language tutor.")
-
-# --- Section 1: Microphone Recorder ---
-audio_data = mic_recorder(
+# --- Recorder UI ---
+st.markdown("### 🎙️ Record your voice")
+audio = mic_recorder(
     start_prompt="🎤 Start Recording",
-    stop_prompt="⏹️ Stop",
+    stop_prompt="⏹️ Stop Recording",
     just_once=False,
     use_container_width=True,
     key='recorder'
 )
 
-# OR Section 2: Upload File
-uploaded_file = st.file_uploader("Or upload an audio file (wav, mp3, m4a, ogg):", type=["wav", "mp3", "m4a", "ogg"])
+# --- Upload Option ---
+st.markdown("### 🎵 Or Upload an Audio File")
+uploaded_file = st.file_uploader("Upload audio", type=["wav", "mp3", "ogg", "m4a"])
 
-# Handle the input
-if audio_data or uploaded_file:
-    # Determine source
-    audio_bytes = None
-    sample_rate = 16000  # default fallback
+# --- Handle Audio Input ---
+audio_bytes = None
+audio_format = "wav"
 
-    if audio_data:
-        st.success("✅ Recording complete!")
-        st.audio(audio_data['bytes'], format=audio_data['format'])
-        audio_bytes = audio_data['bytes']
-        sample_rate = audio_data['sample_rate']
+if audio:
+    audio_bytes = audio["bytes"]
+    audio_format = audio["format"]
+    st.audio(audio_bytes, format=f'audio/{audio_format}')
+elif uploaded_file:
+    audio_bytes = uploaded_file.read()
+    audio_format = uploaded_file.name.split('.')[-1]
+    st.audio(audio_bytes, format=f'audio/{audio_format}')
 
-    elif uploaded_file:
-        st.success("✅ File uploaded!")
-        st.audio(uploaded_file, format="audio/wav")
-        audio_bytes = uploaded_file.read()
-        sample_rate = 16000  # may vary
+# --- Feedback Button ---
+if audio_bytes and os.getenv("GEMINI_API_KEY"):
+    st.markdown("### 🤖 Get AI Voice Feedback")
+    if st.button("🧠 Send to Gemini AI"):
+        with st.spinner("🎧 Gemini is analyzing your voice..."):
 
-    # Gemini expects PCM format
-    st.markdown("🎧 Processing your audio and sending to Gemini...")
+            # Save to temp WAV file in PCM16 for Gemini
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                with wave.open(tmp.name, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(SAMPLE_RATE)
+                    wf.writeframes(audio_bytes)
+                tmp_path = tmp.name
 
-    try:
-        with client.aio.live.connect(model=MODEL, config=config) as session:
-            # Convert to required PCM format
-            pcm_buffer = io.BytesIO()
-            data, samplerate = sf.read(io.BytesIO(audio_bytes))
-            sf.write(pcm_buffer, data, 16000, format='RAW', subtype='PCM_16')
-            pcm_bytes = pcm_buffer.getvalue()
+            # Load saved audio and convert to raw PCM16
+            with open(tmp_path, 'rb') as f:
+                raw_audio = f.read()
 
-            # Send to Gemini
-            session.send_realtime_input(
-                audio=Blob(data=pcm_bytes, mime_type="audio/pcm;rate=16000")
-            )
+            async def get_gemini_response():
+                client = genai.AsyncClient()
+                config = {
+                    "response_modalities": ["AUDIO"],
+                    "system_instruction": (
+                        "You are a friendly and patient language learning assistant. "
+                        "Provide pronunciation feedback, grammar corrections, and encouragement. "
+                        "Be kind, helpful, and engaging in your tone."
+                    ),
+                }
 
-            # Collect audio response
-            ai_audio = io.BytesIO()
-            async for response in session.receive():
-                if response.data:
-                    ai_audio.write(response.data)
-            ai_audio.seek(0)
+                async with client.aio.live.connect(model=MODEL, config=config) as session:
+                    await session.send_realtime_input(
+                        audio=Blob(data=raw_audio, mime_type="audio/pcm;rate=16000")
+                    )
 
-        st.success("✅ AI Response received!")
-        st.markdown("### 🔁 Gemini's Spoken Feedback")
-        st.audio(ai_audio.read(), format="audio/wav")
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as resp_wav:
+                        wf = wave.open(resp_wav.name, 'wb')
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(24000)
 
-    except Exception as e:
-        st.error(f"❌ Error during processing: {e}")
+                        async for response in session.receive():
+                            if response.data:
+                                wf.writeframes(response.data)
 
-# Footer Instructions
-with st.expander("ℹ️ How to Use"):
+                        wf.close()
+                        return resp_wav.name
+
+            response_audio_path = asyncio.run(get_gemini_response())
+
+            # Playback Gemini response
+            st.success("✅ Feedback received!")
+            with open(response_audio_path, "rb") as f:
+                st.audio(f.read(), format="audio/wav")
+
+# --- Instructions ---
+with st.expander("📝 How to use"):
     st.markdown("""
-    - Use the microphone to record your voice or upload an audio file.
-    - Your voice is analyzed by Gemini AI for pronunciation and language feedback.
-    - You will receive an AI-generated spoken response to help improve your language.
-    - Best used with clear, slow speech for optimal feedback.
-    """)
+    1. 🎤 **Record your voice** or upload a recording
+    2. 📩 **Click "Send to Gemini AI"**
+    3. 🤖 **Listen to the feedback** generated by Gemini
+    4. 🧠 Practice and improve!
 
+    **Note:**
+    - Gemini responds in audio (like a language tutor).
+    - This app processes raw audio in-browser and via Gemini’s native audio model.
+    """)
