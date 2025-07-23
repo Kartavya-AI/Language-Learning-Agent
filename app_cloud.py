@@ -298,7 +298,6 @@ import wave
 import numpy as np
 from google import genai
 from google.genai import types
-import os
 import tempfile
 import traceback
 from dotenv import load_dotenv
@@ -328,15 +327,22 @@ with st.sidebar:
     if st.button("💾 Save Settings"):
         if gemini_api_key:
             st.session_state["GEMINI_API_KEY"] = gemini_api_key
-            os.environ["GEMINI_API_KEY"] = gemini_api_key
+            # os.environ["GEMINI_API_KEY"] = gemini_api_key
             st.success("✅ Settings saved successfully!")
         else:
             st.error("❌ Please enter a valid Gemini API key.")
 
 # Load .env variables
 load_dotenv()
-# Get API key from environment
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# ------------------------ #
+# Setup Gemini
+# ------------------------ #
+API_KEY = st.session_state.get("GEMINI_API_KEY") 
+if not API_KEY:
+    st.error("❌ Gemini API key missing! Please set it in the sidebar.")
+    st.stop()
+
 
 # Initialize session state
 if 'audio_data' not in st.session_state:
