@@ -7,19 +7,19 @@ Record your voice, get intelligent audio feedback, and improve your pronunciatio
 
 ### 🚀 Demo
 
-Try it live: _\[coming soon after deployment to Streamlit Cloud]_
+Try it live: _\[https://language-learning-agent.streamlit.app/]_
 Or run locally (instructions below).
 
 ---
 
 ### 🧠 Features
 
-✅ Record your voice directly in the browser
-✅ Upload pre-recorded audio for analysis
-✅ Get AI-generated audio feedback via Gemini
-✅ Supports streaming real-time response
-✅ Clean modular architecture (easy to extend!)
-✅ Runs locally or on [Streamlit Community Cloud](https://streamlit.io/cloud)
+- ✅ Record your voice directly in the browser
+- ✅ Upload pre-recorded audio for analysis
+- ✅ Get AI-generated audio feedback via Gemini
+- ✅ Supports streaming real-time response
+- ✅ Clean modular architecture (easy to extend!)
+- ✅ Runs locally or on [Streamlit Community Cloud](https://streamlit.io/cloud)
 
 ---
 
@@ -126,24 +126,3 @@ GEMINI_API_KEY=your-google-api-key
 - Save user sessions and learning progress
 
 ---
-
-### 🧑‍💻 Author
-
-Built by [Your Name](https://github.com/yourusername)
-Inspired by OpenAI & Google’s Gemini API capabilities
-
----
-
-### 🛡️ License
-
-MIT License
-
----
-
-Let me know if you'd like this:
-
-- Customized with your GitHub username or project URL
-- Packaged as a GitHub-ready template repo
-- Or extended with auto-transcription or Whisper integration
-
-Would you like a `config.toml` for Streamlit Cloud next?
