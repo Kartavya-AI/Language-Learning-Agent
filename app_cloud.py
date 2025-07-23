@@ -143,25 +143,35 @@ if audio and not st.session_state.processing:
             try:
                 with st.spinner("🤖 AI is analyzing your speech..."):
                     async with client.aio.live.connect(model=MODEL, config=config) as session:
-                        # Send audio to Gemini
+
+                        # 1️⃣ Send a user message first
                         await session.send_realtime_input(
-                            audio=types.Blob(
-                                data=audio_data, 
-                                mime_type="audio/pcm;rate=16000"
+                            types.Content(
+                                role="user",
+                                parts=[
+                                    types.Part(text="Please listen to my pronunciation and grammar. Give me helpful feedback.")
+                                ]
                             )
                         )
-                        
-                        # Collect response
+
+                        # 2️⃣ Now send the audio
+                        await session.send_realtime_input(
+                            audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
+                        )
+
+                        # 3️⃣ Wait for response
                         response_audio = b""
                         async for response in session.receive():
                             if response.data:
                                 response_audio += response.data
-                        
+                            if response.text:
+                                st.info("📝 Gemini also said: " + response.text)
+
                         return response_audio
             except Exception as e:
                 st.error(f"❌ Gemini processing error: {e}")
                 return None
-        
+
         # Process the audio
         try:
             # Convert to the right format for Gemini
