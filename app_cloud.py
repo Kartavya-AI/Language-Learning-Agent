@@ -297,9 +297,9 @@ import os
 import tempfile
 import wave
 from dotenv import load_dotenv
-import google.generativeai as genai
 from google.generativeai.types import Blob
 import asyncio
+from google import genai
 
 # Load .env if available
 load_dotenv()
