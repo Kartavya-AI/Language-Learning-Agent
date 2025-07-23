@@ -192,64 +192,10 @@
 # st.markdown("Built with ❤️ using Streamlit & Gemini AI")
 
 import streamlit as st
-import sounddevice as sd
-import numpy as np
-import wave
+from streamlit_mic_recorder import mic_recorder
 import io
-import time
 
-# Configuration
-SAMPLE_RATE = 44100
-CHANNELS = 1
-DTYPE = np.int16
-
-# Initialize session state
-if 'is_recording' not in st.session_state:
-    st.session_state.is_recording = False
-if 'recorded_audio' not in st.session_state:
-    st.session_state.recorded_audio = None
-if 'audio_data' not in st.session_state:
-    st.session_state.audio_data = []
-
-def record_audio():
-    """Record audio continuously until stopped"""
-    st.session_state.audio_data = []
-    
-    def audio_callback(indata, frames, time, status):
-        if status:
-            st.warning(f"Audio input status: {status}")
-        st.session_state.audio_data.append(indata.copy())
-    
-    # Start recording
-    with sd.InputStream(
-        callback=audio_callback,
-        channels=CHANNELS,
-        samplerate=SAMPLE_RATE,
-        dtype=DTYPE
-    ):
-        while st.session_state.is_recording:
-            time.sleep(0.1)
-
-def save_audio_to_bytes():
-    """Convert recorded audio to bytes for playback"""
-    if not st.session_state.audio_data:
-        return None
-    
-    # Concatenate all audio chunks
-    audio_array = np.concatenate(st.session_state.audio_data, axis=0)
-    
-    # Create WAV file in memory
-    buffer = io.BytesIO()
-    with wave.open(buffer, 'wb') as wf:
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(audio_array.tobytes())
-    
-    buffer.seek(0)
-    return buffer.getvalue()
-
-# Streamlit UI
+# Set page config
 st.set_page_config(
     page_title="Voice Recorder",
     page_icon="🎤",
@@ -259,88 +205,88 @@ st.set_page_config(
 st.title("🎤 Simple Voice Recorder")
 st.markdown("Record your voice and play it back!")
 
-# Recording controls
-col1, col2 = st.columns(2)
+# Initialize session state
+if 'audio_data' not in st.session_state:
+    st.session_state.audio_data = None
 
-with col1:
-    if not st.session_state.is_recording:
-        if st.button("🎤 Start Recording", use_container_width=True, type="primary"):
-            st.session_state.is_recording = True
-            st.session_state.recorded_audio = None
-            st.rerun()
+# Simple audio recorder using streamlit-mic-recorder
+st.markdown("### 🎙️ Click the microphone to record")
 
-with col2:
-    if st.session_state.is_recording:
-        if st.button("⏹️ Stop Recording", use_container_width=True, type="secondary"):
-            st.session_state.is_recording = False
-            # Process the recorded audio
-            st.session_state.recorded_audio = save_audio_to_bytes()
-            st.rerun()
+# Record audio
+audio = mic_recorder(
+    start_prompt="🎤 Start Recording",
+    stop_prompt="⏹️ Stop Recording", 
+    just_once=False,
+    use_container_width=True,
+    callback=None,
+    args=(),
+    kwargs={},
+    key='recorder'
+)
 
-# Recording status
-if st.session_state.is_recording:
-    st.markdown("### 🔴 Recording... Click 'Stop Recording' when done")
+# Process recorded audio
+if audio:
+    st.session_state.audio_data = audio
     
-    # Show a live indicator
-    placeholder = st.empty()
-    import threading
-    
-    def update_recording_status():
-        while st.session_state.is_recording:
-            for i in range(4):
-                if not st.session_state.is_recording:
-                    break
-                placeholder.info(f"Recording{'.' * (i + 1)}")
-                time.sleep(0.5)
-    
-    # Start recording in a separate thread
-    if 'recording_thread' not in st.session_state or not st.session_state.recording_thread.is_alive():
-        st.session_state.recording_thread = threading.Thread(target=record_audio)
-        st.session_state.recording_thread.daemon = True
-        st.session_state.recording_thread.start()
-    
-    # Start status update thread
-    status_thread = threading.Thread(target=update_recording_status)
-    status_thread.daemon = True
-    status_thread.start()
-
-# Playback section
-if st.session_state.recorded_audio and not st.session_state.is_recording:
     st.markdown("### 🔊 Playback")
-    
     st.success("✅ Recording completed!")
     
-    # Audio player
-    st.audio(st.session_state.recorded_audio, format='audio/wav')
+    # Display audio info
+    st.info(f"Audio format: {audio['format']}")
+    st.info(f"Sample rate: {audio['sample_rate']} Hz")
+    
+    # Play audio
+    st.audio(audio['bytes'], format=audio['format'])
     
     # Download button
     st.download_button(
         label="💾 Download Recording",
-        data=st.session_state.recorded_audio,
-        file_name="recorded_audio.wav",
-        mime="audio/wav",
+        data=audio['bytes'],
+        file_name=f"recording.{audio['format']}",
+        mime=f"audio/{audio['format']}",
         use_container_width=True
     )
     
-    # Clear recording button
+    # Clear button
     if st.button("🗑️ Clear Recording", use_container_width=True):
-        st.session_state.recorded_audio = None
-        st.session_state.audio_data = []
+        st.session_state.audio_data = None
         st.rerun()
 
 # Instructions
 with st.expander("📝 How to use"):
     st.markdown("""
-    1. **Click 'Start Recording'** to begin
+    1. **Click the microphone button** to start recording
     2. **Speak into your microphone**
-    3. **Click 'Stop Recording'** when finished
-    4. **Use the audio player** to listen to your recording
-    5. **Download** your recording if needed
-    6. **Clear** to record again
+    3. **Click stop** when finished
+    4. **Listen to your recording** using the audio player
+    5. **Download** if needed, or **Clear** to record again
     
-    **Note**: Make sure to allow microphone access when prompted by your browser.
+    **Note**: 
+    - Your browser will ask for microphone permission
+    - This works on Streamlit Cloud and local development
+    - Audio is processed entirely in the browser
     """)
 
-# Footer
+# Alternative simple recorder if streamlit-mic-recorder doesn't work
 st.markdown("---")
-st.markdown("🎵 Built with Streamlit")
+st.markdown("### 🎵 Alternative: File Upload")
+st.markdown("If the microphone doesn't work, you can upload an audio file:")
+
+uploaded_file = st.file_uploader(
+    "Choose an audio file", 
+    type=['wav', 'mp3', 'ogg', 'm4a'],
+    key='audio_upload'
+)
+
+if uploaded_file is not None:
+    st.audio(uploaded_file, format='audio/wav')
+    
+    st.download_button(
+        label="💾 Download Uploaded File",
+        data=uploaded_file.getvalue(),
+        file_name=uploaded_file.name,
+        mime="audio/wav"
+    )
+
+st.markdown("---")
+st.markdown("🎵 Built with Streamlit - Cloud Compatible")
