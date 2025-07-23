@@ -77,20 +77,29 @@ class AudioProcessor:
         self.frames.append(audio)
         return frame
 
-# Store recorder in session state so it persists
-if "recorder" not in st.session_state:
-    st.session_state.recorder = AudioProcessor()
+# Define class before it's used
+class AudioProcessor:
+    def __init__(self) -> None:
+        self.frames = []
 
-# ------------------------ #
-# Start mic stream
-# ------------------------ #
+    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+        audio = frame.to_ndarray().flatten()
+        self.frames.append(audio)
+        return frame
+
+# Ensure recorder is initialized before WebRTC uses it
+if "recorder" not in st.session_state:
+    st.session_state["recorder"] = AudioProcessor()
+
+recorder_instance = st.session_state["recorder"]
+
 ctx = webrtc_streamer(
     key="mic",
     mode=WebRtcMode.SENDONLY,
     audio_receiver_size=256,
     media_stream_constraints={"video": False, "audio": True},
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    audio_processor_factory=lambda: st.session_state.recorder,
+    audio_processor_factory=lambda: recorder_instance,
 )
 
 # ------------------------ #
